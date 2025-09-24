@@ -36,6 +36,7 @@ python3 -c "
 import re
 import json
 import sys
+import csv
 
 # Read the HTML file
 with open('$LATEST_HTML', 'r', encoding='utf-8') as f:
@@ -52,7 +53,7 @@ table_html = table_match.group(0)
 # Extract all table rows
 rows = re.findall(r'<tr>.*?</tr>', table_html, re.DOTALL)
 
-csv_data = []
+csv_rows = []
 json_data = []
 
 for row in rows:
@@ -75,21 +76,28 @@ for row in rows:
             cell = cell.strip()
             cleaned_cells.append(cell)
 
-        # Add to CSV data
-        csv_data.append(','.join(cleaned_cells))
+        # Convert individual_amount to integer, defaulting to 0 for non-numeric values
+        try:
+            individual_amount = int(float(cleaned_cells[3].replace(',', '').replace('$', '').strip()))
+        except (ValueError, IndexError):
+            individual_amount = 0
+
+        # Add to CSV rows (list of columns). We'll use csv.writer to handle quoting.
+        csv_row = [cleaned_cells[0], cleaned_cells[1], cleaned_cells[2], str(individual_amount)]
+        csv_rows.append(csv_row)
 
         # Add to JSON data
         json_data.append({
             'firearm_reference_number': cleaned_cells[0],
             'make': cleaned_cells[1],
             'model': cleaned_cells[2],
-            'individual_amount': cleaned_cells[3]
+            'individual_amount': individual_amount
         })
 
-# Write CSV data
-with open('$OUTPUT_CSV', 'a', encoding='utf-8') as f:
-    for line in csv_data:
-        f.write(line + '\n')
+# Write CSV data with proper quoting for commas and special characters
+with open('$OUTPUT_CSV', 'a', encoding='utf-8', newline='') as f:
+    writer = csv.writer(f, quoting=csv.QUOTE_MINIMAL, lineterminator='\n')
+    writer.writerows(csv_rows)
 
 # Write JSON data
 with open('$OUTPUT_JSON', 'w', encoding='utf-8') as f:
