@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Compensation Calculator • ASFCP</title>
+  <meta name="description" content="Search firearms and estimate total compensation by quantity.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="./styles.css">
+  <style>
+    .toolbar { display: flex; gap: 12px; align-items: center; }
+    .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 16px; }
+    .grid { display: grid; gap: 16px; grid-template-columns: 1fr; }
+    @media (min-width: 900px) { .grid { grid-template-columns: 1.2fr 1fr; } }
+    .input { width: 100%; padding: 10px 12px; border-radius: 8px; border: 1px solid var(--border); background: #0d1430; color: var(--text); }
+    .btn { padding: 8px 12px; border-radius: 8px; border: 1px solid var(--border); background: #0f1840; color: var(--text); cursor: pointer; }
+    .btn:hover { background: #111c4a; }
+    .btn-primary { background: var(--accent); color: #06122e; border-color: transparent; }
+    .btn-primary:hover { filter: brightness(0.95); }
+    .muted { color: var(--muted); }
+    .list { margin: 0; padding: 0; list-style: none; }
+    .list li { display: flex; align-items: center; justify-content: space-between; padding: 10px 0; border-bottom: 1px solid var(--border); gap: 12px; }
+    .list li:last-child { border-bottom: none; }
+    .pill { display: inline-block; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--border); background: #0f1640; font-size: 12px; }
+    .table { width: 100%; border-collapse: collapse; }
+    .table th, .table td { padding: 10px; border-bottom: 1px solid var(--border); text-align: left; }
+    .table input[type=number] { width: 90px; }
+    .right { text-align: right; }
+    .total { font-weight: 700; font-size: 18px; }
+    .error { color: #ff7b7b; }
+    .skeleton { background: linear-gradient(90deg, #0e1430, #111a3b, #0e1430); background-size: 200% 100%; animation: shimmer 1.2s infinite; height: 18px; border-radius: 6px; }
+    @keyframes shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
+  </style>
+</head>
+<body>
+  <header class="site-header">
+    <div class="container">
+      <h1>Compensation Calculator</h1>
+      <p class="subtitle">Search firearms and estimate total compensation by quantity.</p>
+    </div>
+  </header>
+
+  <main class="container">
+    <div class="grid">
+      <section class="panel">
+        <h2 style="margin-top:0">Search catalog</h2>
+        <div class="toolbar" style="margin-bottom: 12px;">
+          <input id="search" class="input" type="search" placeholder="Search by make, model, or reference number…" aria-label="Search firearms" />
+          <button id="clearSearch" class="btn" type="button">Clear</button>
+        </div>
+        <div id="results">
+          <div class="skeleton" style="width: 60%; margin: 10px 0;"></div>
+          <div class="skeleton" style="width: 80%; margin: 10px 0;"></div>
+          <div class="skeleton" style="width: 70%; margin: 10px 0;"></div>
+        </div>
+        <p id="loadError" class="error" style="display:none"></p>
+      </section>
+
+      <section class="panel">
+        <h2 style="margin-top:0">Your selection</h2>
+        <div style="overflow-x:auto">
+          <table class="table" id="selectionTable" aria-describedby="selectionHelp">
+            <thead>
+              <tr>
+                <th style="min-width:120px">Ref #</th>
+                <th>Make</th>
+                <th>Model</th>
+                <th class="right">Amount</th>
+                <th class="right">Qty</th>
+                <th class="right">Subtotal</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody id="selectionBody">
+              <tr id="emptyRow"><td colspan="7" class="muted">No items added yet.</td></tr>
+            </tbody>
+            <tfoot>
+              <tr>
+                <td colspan="5" class="right total">Total</td>
+                <td class="right total" id="grandTotal">$0</td>
+                <td></td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+        <p id="selectionHelp" class="muted">Quantities default to 1. Adjust quantities to update totals.</p>
+      </section>
+    </div>
+  </main>
+
+  <footer class="site-footer">
+    <div class="container">
+      <p><a href="./index.html">← Back to docs home</a></p>
+    </div>
+  </footer>
+
+  <script>
+    const DATA_URL = 'https://raw.githubusercontent.com/muz/asfcp/refs/heads/main/data/firearms_data_1758679491.json';
+
+    /** State **/
+    let catalog = [];
+    const selected = new Map(); // key: ref#, value: { item, qty }
+
+    /** DOM **/
+    const searchInput = document.getElementById('search');
+    const clearBtn = document.getElementById('clearSearch');
+    const resultsEl = document.getElementById('results');
+    const selectionBody = document.getElementById('selectionBody');
+    const emptyRow = document.getElementById('emptyRow');
+    const grandTotalEl = document.getElementById('grandTotal');
+    const loadErrorEl = document.getElementById('loadError');
+
+    function formatCurrency(cents) {
+      try {
+        return new Intl.NumberFormat(undefined, { style: 'currency', currency: 'CAD', maximumFractionDigits: 0 }).format(cents);
+      } catch (_) {
+        return '$' + (cents || 0).toString();
+      }
+    }
+
+    function renderResults(list) {
+      if (!Array.isArray(list) || list.length === 0) {
+        resultsEl.innerHTML = '<p class="muted">No results. Try a different search.</p>';
+        return;
+      }
+      resultsEl.innerHTML = '<ul class="list">' + list.map(item => {
+        const key = item.firearm_reference_number;
+        const added = selected.has(key);
+        return `
+          <li>
+            <div style="min-width:0;">
+              <div><strong>${key}</strong> · ${escapeHtml(item.make)} — ${escapeHtml(item.model)}</div>
+              <div class="muted">Amount: <span class="pill">${formatCurrency(item.individual_amount)}</span></div>
+            </div>
+            <div>
+              <button class="btn ${added ? 'btn-primary' : ''}" data-add="${key}" ${added ? 'disabled' : ''}>${added ? 'Added' : 'Add'}</button>
+            </div>
+          </li>`;
+      }).join('') + '</ul>';
+
+      // Attach handlers
+      resultsEl.querySelectorAll('[data-add]').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const key = btn.getAttribute('data-add');
+          const item = catalog.find(x => x.firearm_reference_number === key);
+          if (!item || selected.has(key)) return;
+          selected.set(key, { item, qty: 1 });
+          renderSelection();
+          btn.textContent = 'Added';
+          btn.disabled = true;
+          btn.classList.add('btn-primary');
+        });
+      });
+    }
+
+    function renderSelection() {
+      const entries = Array.from(selected.values());
+      if (entries.length === 0) {
+        selectionBody.innerHTML = '<tr id="emptyRow"><td colspan="7" class="muted">No items added yet.</td></tr>';
+        grandTotalEl.textContent = '$0';
+        return;
+      }
+
+      let total = 0;
+      selectionBody.innerHTML = entries.map(({ item, qty }) => {
+        const ref = item.firearm_reference_number;
+        const amount = Number(item.individual_amount) || 0;
+        const subtotal = amount * (Number(qty) || 1);
+        total += subtotal;
+        return `
+          <tr>
+            <td>${ref}</td>
+            <td>${escapeHtml(item.make)}</td>
+            <td>${escapeHtml(item.model)}</td>
+            <td class="right">${formatCurrency(amount)}</td>
+            <td class="right">
+              <input type="number" min="0" step="1" value="${Number(qty) || 1}" data-qty="${ref}" />
+            </td>
+            <td class="right">${formatCurrency(subtotal)}</td>
+            <td class="right">
+              <button class="btn" data-remove="${ref}">Remove</button>
+            </td>
+          </tr>`;
+      }).join('');
+
+      grandTotalEl.textContent = formatCurrency(total);
+
+      // Bind qty and remove events
+      selectionBody.querySelectorAll('[data-qty]').forEach(input => {
+        input.addEventListener('input', () => {
+          const ref = input.getAttribute('data-qty');
+          const entry = selected.get(ref);
+          if (!entry) return;
+          const value = Math.max(0, Math.floor(Number(input.value) || 0));
+          entry.qty = value;
+          renderSelection();
+        });
+      });
+      selectionBody.querySelectorAll('[data-remove]').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const ref = btn.getAttribute('data-remove');
+          selected.delete(ref);
+          renderSelection();
+          // Also re-enable add button in results if visible
+          const addBtn = resultsEl.querySelector(`[data-add="${ref}"]`);
+          if (addBtn) {
+            addBtn.disabled = false;
+            addBtn.textContent = 'Add';
+            addBtn.classList.remove('btn-primary');
+          }
+        });
+      });
+    }
+
+    function debounce(fn, wait) {
+      let t; return (...args) => { clearTimeout(t); t = setTimeout(() => fn(...args), wait); };
+    }
+
+    function escapeHtml(str) {
+      return String(str || '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    }
+
+    const doSearch = debounce(() => {
+      const q = (searchInput.value || '').toLowerCase().trim();
+      if (!q) {
+        renderResults(catalog.slice(0, 25));
+        return;
+      }
+      const results = catalog.filter(item => {
+        const hay = [
+          item.firearm_reference_number,
+          item.make,
+          item.model
+        ].join(' ').toLowerCase();
+        return hay.includes(q);
+      }).slice(0, 50);
+      renderResults(results);
+    }, 150);
+
+    async function init() {
+      try {
+        const res = await fetch(DATA_URL, { cache: 'no-store' });
+        if (!res.ok) throw new Error('Failed to load data: ' + res.status);
+        const data = await res.json();
+        // Normalize and ensure amount is integer
+        catalog = (Array.isArray(data) ? data : []).map(x => ({
+          firearm_reference_number: String(x.firearm_reference_number || '').trim(),
+          make: String(x.make || ''),
+          model: String(x.model || ''),
+          individual_amount: Number.isFinite(Number(x.individual_amount)) ? parseInt(Number(x.individual_amount)) : 0
+        }));
+        renderResults(catalog.slice(0, 25));
+      } catch (err) {
+        console.error(err);
+        resultsEl.innerHTML = '';
+        loadErrorEl.style.display = '';
+        loadErrorEl.textContent = 'Error loading data. Please refresh to retry.';
+      }
+    }
+
+    searchInput.addEventListener('input', doSearch);
+    clearBtn.addEventListener('click', () => { searchInput.value = ''; doSearch(); searchInput.focus(); });
+    init();
+  </script>
+</body>
+</html>
+
+
