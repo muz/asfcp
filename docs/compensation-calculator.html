@@ -70,21 +70,32 @@
                 <th class="right">Compensation</th>
                 <th class="right">Purchase Year</th>
                 <th class="right">Purchase Price</th>
+                <th class="right">Inflation Adj. Purchase Price</th>
                 <th></th>
               </tr>
             </thead>
             <tbody id="selectionBody">
-              <tr id="emptyRow"><td colspan="7" class="muted">No items added yet.</td></tr>
+              <tr id="emptyRow"><td colspan="8" class="muted">No items added yet.</td></tr>
             </tbody>
             <tfoot>
               <tr>
-                <td colspan="5" class="right total">Total Purchase</td>
+                <td colspan="6" class="right total">Total Purchase</td>
                 <td class="right total" id="totalPurchase">$0</td>
                 <td></td>
               </tr>
               <tr>
-                <td colspan="5" class="right total">Total Compensation</td>
+                <td colspan="6" class="right total">Total Inflation-Adjusted Purchase</td>
+                <td class="right total" id="totalPurchaseAdj">$0</td>
+                <td></td>
+              </tr>
+              <tr>
+                <td colspan="6" class="right total">Total Compensation</td>
                 <td class="right total" id="totalCompensation">$0</td>
+                <td></td>
+              </tr>
+              <tr>
+                <td colspan="6" class="right total">Total Difference (Compensation − Inflation-Adjusted Purchase)</td>
+                <td class="right total" id="totalDifference">$0</td>
                 <td></td>
               </tr>
             </tfoot>
@@ -116,7 +127,13 @@
     const emptyRow = document.getElementById('emptyRow');
     const totalCompensationEl = document.getElementById('totalCompensation');
     const totalPurchaseEl = document.getElementById('totalPurchase');
+    const totalPurchaseAdjEl = document.getElementById('totalPurchaseAdj');
+    const totalDifferenceEl = document.getElementById('totalDifference');
     const loadErrorEl = document.getElementById('loadError');
+
+    // CPI data (inline annual averages)
+    let yearToAvgCPI = {}; // { [year]: average CPI }
+    let referenceCPI = null; // latest available annual average CPI
 
     function formatCurrency(cents) {
       try {
@@ -176,11 +193,12 @@
             <td>${escapeHtml(item.model)}</td>
             <td class="right">${formatCurrency(compensation)}</td>
             <td class="right">
-              <input type="number" min="1900" max="2030" step="1" value="${year}" data-year="${id}" placeholder="Year" style="width: 80px;" />
+              <input type="number" min="1914" max="2025" step="1" value="${year}" data-year="${id}" placeholder="Year" style="width: 80px;" />
             </td>
             <td class="right">
-              <input type="number" min="0" step="0.01" value="${purchasePrice}" data-price="${id}" placeholder="0.00" style="width: 100px;" />
+              <input type="number" min="0" step="1" value="${purchasePrice}" data-price="${id}" placeholder="0" style="width: 100px;" />
             </td>
+            <td class="right"><span data-adjusted="${id}">$0</span></td>
             <td class="right">
               <button class="btn" data-remove="${id}">Remove</button>
             </td>
@@ -223,13 +241,50 @@
     function updateTotals() {
       let totalCompensation = 0;
       let totalPurchase = 0;
-      selected.forEach(({ item, purchasePrice }) => {
-        totalCompensation += Number(item.individual_amount) || 0;
-        totalPurchase += Number(purchasePrice) || 0;
+      let totalPurchaseAdj = 0;
+      selected.forEach(({ item, purchasePrice, year, id }) => {
+        const comp = Number(item.individual_amount) || 0;
+        const price = Number(purchasePrice) || 0;
+        totalCompensation += comp;
+        totalPurchase += price;
+        let adj = 0;
+        const y = parseInt(year, 10);
+        if (Number.isFinite(y) && y >= 1914) {
+          if (y >= 2025) {
+            adj = price; // latest year available—no adjustment beyond 2025
+          } else if (yearToAvgCPI[y] && referenceCPI) {
+            const factor = referenceCPI / yearToAvgCPI[y];
+            adj = Math.round(price * factor);
+          }
+        }
+        totalPurchaseAdj += adj;
+        const span = selectionBody.querySelector(`[data-adjusted="${id}"]`);
+        if (span) span.textContent = formatCurrency(adj);
       });
       totalCompensationEl.textContent = formatCurrency(totalCompensation);
       totalPurchaseEl.textContent = formatCurrency(totalPurchase);
+      totalPurchaseAdjEl.textContent = formatCurrency(totalPurchaseAdj);
+      totalDifferenceEl.textContent = formatCurrency(totalCompensation - totalPurchaseAdj);
     }
+
+    // Initialize CPI from inline JSON after the page fully loads,
+    // because the <script id="cpi-data"> tag is placed after this script block.
+    window.addEventListener('load', () => {
+      try {
+        const el = document.getElementById('cpi-data');
+        if (!el) throw new Error('Missing inline CPI data');
+        const obj = JSON.parse(el.textContent || '{}');
+        yearToAvgCPI = obj || {};
+        const years = Object.keys(yearToAvgCPI)
+          .map(n => parseInt(n,10))
+          .filter(n => Number.isFinite(n))
+          .sort((a,b)=>a-b);
+        referenceCPI = years.length ? yearToAvgCPI[years[years.length - 1]] : null;
+      } catch (e) {
+        console.error(e);
+      }
+      updateTotals();
+    });
 
     function debounce(fn, wait) {
       let t; return (...args) => { clearTimeout(t); t = setTimeout(() => fn(...args), wait); };
@@ -285,6 +340,121 @@
     searchInput.addEventListener('input', doSearch);
     clearBtn.addEventListener('click', () => { searchInput.value = ''; doSearch(); searchInput.focus(); });
     init();
+  </script>
+  <script type="application/json" id="cpi-data">
+  {
+    "1914": 10.3,
+    "1915": 10.6,
+    "1916": 11.3,
+    "1917": 13.1,
+    "1918": 15.1,
+    "1919": 16.0,
+    "1920": 16.8,
+    "1921": 14.6,
+    "1922": 13.5,
+    "1923": 13.7,
+    "1924": 13.6,
+    "1925": 13.8,
+    "1926": 14.4,
+    "1927": 14.1,
+    "1928": 13.9,
+    "1929": 13.8,
+    "1930": 13.0,
+    "1931": 11.2,
+    "1932": 10.3,
+    "1933": 10.0,
+    "1934": 10.1,
+    "1935": 10.4,
+    "1936": 10.5,
+    "1937": 10.9,
+    "1938": 10.7,
+    "1939": 10.8,
+    "1940": 11.3,
+    "1941": 12.6,
+    "1942": 14.0,
+    "1943": 14.7,
+    "1944": 15.0,
+    "1945": 15.3,
+    "1946": 16.5,
+    "1947": 19.1,
+    "1948": 20.5,
+    "1949": 20.3,
+    "1950": 20.8,
+    "1951": 22.6,
+    "1952": 22.8,
+    "1953": 22.9,
+    "1954": 23.0,
+    "1955": 23.2,
+    "1956": 23.9,
+    "1957": 24.9,
+    "1958": 25.5,
+    "1959": 25.9,
+    "1960": 26.4,
+    "1961": 26.7,
+    "1962": 27.3,
+    "1963": 28.1,
+    "1964": 28.9,
+    "1965": 29.6,
+    "1966": 31.0,
+    "1967": 32.2,
+    "1968": 33.8,
+    "1969": 36.1,
+    "1970": 38.4,
+    "1971": 40.0,
+    "1972": 41.5,
+    "1973": 44.1,
+    "1974": 49.8,
+    "1975": 55.3,
+    "1976": 59.0,
+    "1977": 62.9,
+    "1978": 67.1,
+    "1979": 74.3,
+    "1980": 84.4,
+    "1981": 94.0,
+    "1982": 102.0,
+    "1983": 106.0,
+    "1984": 109.6,
+    "1985": 113.0,
+    "1986": 116.2,
+    "1987": 120.0,
+    "1988": 124.0,
+    "1989": 129.0,
+    "1990": 134.2,
+    "1991": 139.8,
+    "1992": 141.9,
+    "1993": 143.4,
+    "1994": 144.6,
+    "1995": 146.9,
+    "1996": 148.4,
+    "1997": 149.8,
+    "1998": 150.9,
+    "1999": 153.0,
+    "2000": 158.6,
+    "2001": 162.6,
+    "2002": 164.5,
+    "2003": 168.2,
+    "2004": 171.2,
+    "2005": 176.0,
+    "2006": 180.2,
+    "2007": 184.0,
+    "2008": 189.9,
+    "2009": 188.7,
+    "2010": 191.5,
+    "2011": 197.9,
+    "2012": 200.5,
+    "2013": 202.3,
+    "2014": 204.8,
+    "2015": 205.7,
+    "2016": 208.0,
+    "2017": 211.1,
+    "2018": 215.3,
+    "2019": 220.8,
+    "2020": 221.6,
+    "2021": 229.7,
+    "2022": 244.6,
+    "2023": 251.1,
+    "2024": 256.8
+  }
   </script>
 </body>
 </html>
