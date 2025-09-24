@@ -14,6 +14,7 @@ asfcp/
 │   ├── fetch.sh                                 # Downloads HTML data from government website
 │   └── parse.sh                                 # Parses HTML table to CSV and JSON
 ├── data/                                        # Processed data files
+├── docs/                                        # Static webpages hosted on Github Pages
 └── ref/                                         # Raw reference files
 ```
 
