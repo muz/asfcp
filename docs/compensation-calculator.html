@@ -67,9 +67,9 @@
                 <th style="min-width:120px">Ref #</th>
                 <th>Make</th>
                 <th>Model</th>
-                <th class="right">Amount</th>
-                <th class="right">Qty</th>
-                <th class="right">Subtotal</th>
+                <th class="right">Compensation</th>
+                <th class="right">Purchase Year</th>
+                <th class="right">Purchase Price</th>
                 <th></th>
               </tr>
             </thead>
@@ -78,14 +78,19 @@
             </tbody>
             <tfoot>
               <tr>
-                <td colspan="5" class="right total">Total</td>
-                <td class="right total" id="grandTotal">$0</td>
+                <td colspan="5" class="right total">Total Purchase</td>
+                <td class="right total" id="totalPurchase">$0</td>
+                <td></td>
+              </tr>
+              <tr>
+                <td colspan="5" class="right total">Total Compensation</td>
+                <td class="right total" id="totalCompensation">$0</td>
                 <td></td>
               </tr>
             </tfoot>
           </table>
         </div>
-        <p id="selectionHelp" class="muted">Quantities default to 1. Adjust quantities to update totals.</p>
+        <p id="selectionHelp" class="muted">Enter the year purchased and purchase price for each firearm. Totals show purchase sum and compensation sum.</p>
       </section>
     </div>
   </main>
@@ -101,7 +106,7 @@
 
     /** State **/
     let catalog = [];
-    const selected = new Map(); // key: ref#, value: { item, qty }
+    const selected = []; // array of { item, year, purchasePrice, id }
 
     /** DOM **/
     const searchInput = document.getElementById('search');
@@ -109,7 +114,8 @@
     const resultsEl = document.getElementById('results');
     const selectionBody = document.getElementById('selectionBody');
     const emptyRow = document.getElementById('emptyRow');
-    const grandTotalEl = document.getElementById('grandTotal');
+    const totalCompensationEl = document.getElementById('totalCompensation');
+    const totalPurchaseEl = document.getElementById('totalPurchase');
     const loadErrorEl = document.getElementById('loadError');
 
     function formatCurrency(cents) {
@@ -127,15 +133,14 @@
       }
       resultsEl.innerHTML = '<ul class="list">' + list.map(item => {
         const key = item.firearm_reference_number;
-        const added = selected.has(key);
         return `
           <li>
             <div style="min-width:0;">
               <div><strong>${key}</strong> · ${escapeHtml(item.make)} — ${escapeHtml(item.model)}</div>
-              <div class="muted">Amount: <span class="pill">${formatCurrency(item.individual_amount)}</span></div>
+              <div class="muted">Compensation: <span class="pill">${formatCurrency(item.individual_amount)}</span></div>
             </div>
             <div>
-              <button class="btn ${added ? 'btn-primary' : ''}" data-add="${key}" ${added ? 'disabled' : ''}>${added ? 'Added' : 'Add'}</button>
+              <button class="btn" data-add="${key}">Add</button>
             </div>
           </li>`;
       }).join('') + '</ul>';
@@ -145,73 +150,85 @@
         btn.addEventListener('click', () => {
           const key = btn.getAttribute('data-add');
           const item = catalog.find(x => x.firearm_reference_number === key);
-          if (!item || selected.has(key)) return;
-          selected.set(key, { item, qty: 1 });
+          if (!item) return;
+          const id = Date.now() + Math.random(); // unique ID for this instance
+          selected.push({ item, year: '', purchasePrice: '', id });
           renderSelection();
-          btn.textContent = 'Added';
-          btn.disabled = true;
-          btn.classList.add('btn-primary');
         });
       });
     }
 
     function renderSelection() {
-      const entries = Array.from(selected.values());
-      if (entries.length === 0) {
+      if (selected.length === 0) {
         selectionBody.innerHTML = '<tr id="emptyRow"><td colspan="7" class="muted">No items added yet.</td></tr>';
-        grandTotalEl.textContent = '$0';
+        totalCompensationEl.textContent = '$0';
+        totalPurchaseEl.textContent = '$0';
         return;
       }
 
-      let total = 0;
-      selectionBody.innerHTML = entries.map(({ item, qty }) => {
+      selectionBody.innerHTML = selected.map(({ item, year, purchasePrice, id }) => {
         const ref = item.firearm_reference_number;
-        const amount = Number(item.individual_amount) || 0;
-        const subtotal = amount * (Number(qty) || 1);
-        total += subtotal;
+        const compensation = Number(item.individual_amount) || 0;
         return `
           <tr>
             <td>${ref}</td>
             <td>${escapeHtml(item.make)}</td>
             <td>${escapeHtml(item.model)}</td>
-            <td class="right">${formatCurrency(amount)}</td>
+            <td class="right">${formatCurrency(compensation)}</td>
             <td class="right">
-              <input type="number" min="0" step="1" value="${Number(qty) || 1}" data-qty="${ref}" />
+              <input type="number" min="1900" max="2030" step="1" value="${year}" data-year="${id}" placeholder="Year" style="width: 80px;" />
             </td>
-            <td class="right">${formatCurrency(subtotal)}</td>
             <td class="right">
-              <button class="btn" data-remove="${ref}">Remove</button>
+              <input type="number" min="0" step="0.01" value="${purchasePrice}" data-price="${id}" placeholder="0.00" style="width: 100px;" />
+            </td>
+            <td class="right">
+              <button class="btn" data-remove="${id}">Remove</button>
             </td>
           </tr>`;
       }).join('');
 
-      grandTotalEl.textContent = formatCurrency(total);
+      updateTotals();
 
-      // Bind qty and remove events
-      selectionBody.querySelectorAll('[data-qty]').forEach(input => {
+      // Bind year, price and remove events
+      selectionBody.querySelectorAll('[data-year]').forEach(input => {
         input.addEventListener('input', () => {
-          const ref = input.getAttribute('data-qty');
-          const entry = selected.get(ref);
+          const id = input.getAttribute('data-year');
+          const entry = selected.find(x => x.id == id);
           if (!entry) return;
-          const value = Math.max(0, Math.floor(Number(input.value) || 0));
-          entry.qty = value;
-          renderSelection();
+          entry.year = input.value;
+          updateTotals();
+        });
+      });
+      selectionBody.querySelectorAll('[data-price]').forEach(input => {
+        input.addEventListener('input', () => {
+          const id = input.getAttribute('data-price');
+          const entry = selected.find(x => x.id == id);
+          if (!entry) return;
+          entry.purchasePrice = input.value;
+          updateTotals();
         });
       });
       selectionBody.querySelectorAll('[data-remove]').forEach(btn => {
         btn.addEventListener('click', () => {
-          const ref = btn.getAttribute('data-remove');
-          selected.delete(ref);
-          renderSelection();
-          // Also re-enable add button in results if visible
-          const addBtn = resultsEl.querySelector(`[data-add="${ref}"]`);
-          if (addBtn) {
-            addBtn.disabled = false;
-            addBtn.textContent = 'Add';
-            addBtn.classList.remove('btn-primary');
+          const id = btn.getAttribute('data-remove');
+          const index = selected.findIndex(x => x.id == id);
+          if (index >= 0) {
+            selected.splice(index, 1);
+            renderSelection();
           }
         });
       });
+    }
+
+    function updateTotals() {
+      let totalCompensation = 0;
+      let totalPurchase = 0;
+      selected.forEach(({ item, purchasePrice }) => {
+        totalCompensation += Number(item.individual_amount) || 0;
+        totalPurchase += Number(purchasePrice) || 0;
+      });
+      totalCompensationEl.textContent = formatCurrency(totalCompensation);
+      totalPurchaseEl.textContent = formatCurrency(totalPurchase);
     }
 
     function debounce(fn, wait) {
